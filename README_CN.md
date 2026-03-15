@@ -166,7 +166,7 @@ pm2 startup  # 开机自启
 
 ```nginx
 server {
-    listen 80;
+    listen 443 ssl http2;
     server_name edgetts-ws.example.com;
 
     location / {
@@ -179,6 +179,61 @@ server {
 ```
 
 > ⚠️ **`proxy_buffering off`** 是流式模式正常工作的必要条件。否则 Nginx 会缓冲整个响应后才发送给客户端。
+
+### 优化后的 Nginx 配置（推荐）
+
+以下优化可显著提升生产环境性能：
+
+```nginx
+upstream edgetts_backend {
+    server 127.0.0.1:8765;
+    keepalive 8;                    # 复用连接，减少 TCP 握手开销
+}
+
+server {
+    listen 443 ssl http2;
+    server_name edgetts-ws.example.com;
+
+    ssl_session_cache shared:SSL:10m;  # SSL 会话复用，减少 TLS 握手
+    ssl_session_timeout 10m;
+
+    location / {
+        proxy_pass http://edgetts_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";     # 启用 upstream keepalive
+
+        # 流式性能优化
+        proxy_buffering off;                # 不缓冲 NDJSON 流
+        proxy_cache off;                    # 动态 TTS 不缓存
+        tcp_nodelay on;                     # 小数据包立即发送
+        chunked_transfer_encoding on;       # 分块传输
+
+        # 宽松超时，支持超长文本合成
+        proxy_connect_timeout 10;
+        proxy_read_timeout 300;             # 5 分钟，支持长文本
+        proxy_send_timeout 300;
+
+        # 压缩 JSON/NDJSON 响应
+        gzip on;
+        gzip_types application/json application/x-ndjson;
+        gzip_min_length 256;
+    }
+}
+```
+
+| 配置项 | 作用 |
+|--------|------|
+| `upstream keepalive 8` | 复用到 Python 后端的连接，省去每次请求的 TCP 握手 |
+| `Connection ""` | 配合 upstream keepalive 使用 |
+| `tcp_nodelay on` | NDJSON 小数据包立即发送，不等待填满 |
+| `proxy_buffering off` | 数据到达即转发给客户端 |
+| `proxy_read_timeout 300` | 允许最长 5 分钟的长文本合成 |
+| `gzip on` | 压缩 JSON 响应，减少带宽 |
+| `ssl_session_cache` | 缓存 TLS 会话，加速重连 |
 
 ## 可用语音
 

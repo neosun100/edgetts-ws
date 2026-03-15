@@ -174,7 +174,7 @@ pm2 startup  # enable auto-start on reboot
 
 ```nginx
 server {
-    listen 80;
+    listen 443 ssl http2;
     server_name edgetts-ws.example.com;
 
     location / {
@@ -187,6 +187,61 @@ server {
 ```
 
 > ⚠️ **`proxy_buffering off`** is required for streaming mode. Without it, Nginx buffers the entire response before sending to the client, defeating the purpose of streaming.
+
+### Optimized Nginx Configuration (recommended)
+
+For production use, the following optimizations significantly improve performance:
+
+```nginx
+upstream edgetts_backend {
+    server 127.0.0.1:8765;
+    keepalive 8;                    # reuse connections, reduce TCP handshake overhead
+}
+
+server {
+    listen 443 ssl http2;
+    server_name edgetts-ws.example.com;
+
+    ssl_session_cache shared:SSL:10m;  # SSL session reuse, fewer TLS handshakes
+    ssl_session_timeout 10m;
+
+    location / {
+        proxy_pass http://edgetts_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";     # enable keepalive to upstream
+
+        # Streaming performance
+        proxy_buffering off;                # don't buffer NDJSON stream
+        proxy_cache off;                    # no caching for dynamic TTS
+        tcp_nodelay on;                     # send small packets immediately
+        chunked_transfer_encoding on;       # chunked streaming
+
+        # Generous timeouts for long text synthesis
+        proxy_connect_timeout 10;
+        proxy_read_timeout 300;             # 5 min for very long texts
+        proxy_send_timeout 300;
+
+        # Compress JSON/NDJSON responses
+        gzip on;
+        gzip_types application/json application/x-ndjson;
+        gzip_min_length 256;
+    }
+}
+```
+
+| Setting | Purpose |
+|---------|---------|
+| `upstream keepalive 8` | Reuse connections to Python backend, eliminates per-request TCP handshake |
+| `Connection ""` | Required for upstream keepalive to work |
+| `tcp_nodelay on` | Send small NDJSON lines immediately without waiting to fill a packet |
+| `proxy_buffering off` | Stream data directly to client as it arrives |
+| `proxy_read_timeout 300` | Allow up to 5 minutes for long text synthesis |
+| `gzip on` | Compress JSON responses, reduces bandwidth |
+| `ssl_session_cache` | Cache TLS sessions, faster reconnections |
 
 ## Available Voices
 
