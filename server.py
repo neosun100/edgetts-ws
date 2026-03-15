@@ -1,5 +1,5 @@
 from aiohttp import web
-import edge_tts, base64
+import edge_tts, base64, json
 
 async def handle(request):
     if request.method == 'OPTIONS':
@@ -12,6 +12,7 @@ async def handle(request):
     text = body.get('input', '')
     voice = body.get('voice', 'en-US-AvaNeural')
     speed = body.get('speed', 1.0)
+    stream = body.get('stream', False)
     if not text:
         return web.json_response({'error': 'Missing input'}, status=400, headers=cors())
 
@@ -19,22 +20,29 @@ async def handle(request):
 
     try:
         c = edge_tts.Communicate(text, voice, rate=rate, boundary="WordBoundary")
+
+        if stream:
+            resp = web.StreamResponse(headers={**cors(), 'Content-Type': 'application/x-ndjson'})
+            await resp.prepare(request)
+            async for chunk in c.stream():
+                if chunk["type"] == "WordBoundary":
+                    await resp.write((json.dumps({'type':'word','text':chunk['text'],'offset':chunk['offset']/10000,'duration':chunk['duration']/10000})+'\n').encode())
+                elif chunk["type"] == "audio":
+                    await resp.write((json.dumps({'type':'audio','data':base64.b64encode(chunk['data']).decode()})+'\n').encode())
+            await resp.write((json.dumps({'type':'done'})+'\n').encode())
+            await resp.write_eof()
+            return resp
+
+        # Non-streaming
         timestamps = []
         audio_chunks = []
         async for chunk in c.stream():
             if chunk["type"] == "WordBoundary":
-                # Edge TTS returns offset/duration in 100-nanosecond units, convert to ms
-                timestamps.append({
-                    'text': chunk['text'],
-                    'offset': chunk['offset'] / 10000,
-                    'duration': chunk['duration'] / 10000
-                })
+                timestamps.append({'text':chunk['text'],'offset':chunk['offset']/10000,'duration':chunk['duration']/10000})
             elif chunk["type"] == "audio":
                 audio_chunks.append(chunk["data"])
-
-        audio = base64.b64encode(b''.join(audio_chunks)).decode()
         return web.json_response({
-            'audio': audio,
+            'audio': base64.b64encode(b''.join(audio_chunks)).decode(),
             'content_type': 'audio/mpeg',
             'timestamps': timestamps
         }, headers=cors())
