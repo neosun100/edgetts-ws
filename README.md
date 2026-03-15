@@ -5,6 +5,9 @@
 [![Edge TTS](https://img.shields.io/badge/Edge_TTS-WebSocket-purple)](https://github.com/rany2/edge-tts)
 [![aiohttp](https://img.shields.io/badge/aiohttp-3.9+-orange)](https://docs.aiohttp.org)
 
+
+**[中文文档 / Chinese](README_CN.md)**
+
 A lightweight HTTP API server that wraps Microsoft Edge TTS with **word-level timestamps**. Connects to Bing TTS via WebSocket internally, returns synthesized audio (base64 MP3) along with per-word timing data (offset + duration in milliseconds), enabling real-time word-by-word highlighting during playback.
 
 ## How It Works
